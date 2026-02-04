@@ -6,16 +6,14 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-
-// 1. DATABASE CONNECTION
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
 });
 
-// 2. CORS CONFIGURATION (Updated: Removed old link)
+// Update this list with your actual frontend URL
 const allowedOrigins = [
-    "https://pluse-connect.vercel.app", 
+    "https://pluse-connect.vercel.app",
     "https://valentconnect-backend.vercel.app"
 ];
 
@@ -24,7 +22,7 @@ app.use(cors({
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            callback(null, true); 
+            callback(null, true); // Set to true for easier debugging during setup
         }
     },
     methods: ["GET", "POST"],
@@ -33,24 +31,18 @@ app.use(cors({
 
 app.use(express.json());
 
-app.get('/', (req, res) => {
-    res.send('Backend is Awake and Running! ❤️');
-});
-
 const server = http.createServer(app);
-
-// 3. SOCKET.IO CONFIGURATION
 const io = new Server(server, {
     cors: {
-        origin: "https://pluse-connect.vercel.app",
+        origin: allowedOrigins,
         methods: ["GET", "POST"],
         credentials: true
     },
-    transports: ['polling', 'websocket'],
-    allowEIO3: true
+    transports: ['polling', 'websocket']
 });
 
-// --- API ROUTES ---
+// --- ROUTES ---
+app.get('/', (req, res) => res.send('Pulse API Running ❤️'));
 
 app.post('/api/register', async (req, res) => {
     const { roomCode, userA, userB, letterA, letterB, song } = req.body;
@@ -61,62 +53,41 @@ app.post('/api/register', async (req, res) => {
             [roomCode.toUpperCase(), userA, userB, letterA, letterB, song]
         );
         res.json({ success: true });
-    } catch (err) {
-        res.status(400).json({ error: "Room already exists." });
-    }
+    } catch (err) { res.status(400).json({ error: "Room exists" }); }
 });
 
 app.post('/api/login', async (req, res) => {
     const { roomCode, myName } = req.body;
     try {
         const result = await pool.query('SELECT * FROM couples WHERE room_code = $1', [roomCode.toUpperCase()]);
-        if (result.rows.length === 0) return res.status(404).json({ error: "No room." });
+        if (result.rows.length === 0) return res.status(404).json({ error: "No room" });
 
         const couple = result.rows[0];
         let letter = (myName.toLowerCase() === couple.user_a_name.toLowerCase()) ? couple.letter_for_a : couple.letter_for_b;
 
-        res.json({
-            letter: letter,
-            song: couple.selected_song,
-            pulseCount: couple.pulse_count
-        });
-    } catch (err) {
-        res.status(500).json({ error: "Server error" });
-    }
+        res.json({ letter, song: couple.selected_song, pulseCount: couple.pulse_count });
+    } catch (err) { res.status(500).json({ error: "DB error" }); }
 });
 
-// --- SOCKET.IO LOGIC ---
-
+// --- SOCKETS ---
 io.on('connection', (socket) => {
     socket.on('join-room', (room) => {
         const roomUpper = room.toUpperCase();
         socket.join(roomUpper);
-        
         const clients = io.sockets.adapter.rooms.get(roomUpper);
-        const numClients = clients ? clients.size : 0;
-        
-        if (numClients >= 2) {
-            io.to(roomUpper).emit('update-ui', { isPartnerPresent: true });
-        } else {
-            socket.emit('update-ui', { isPartnerPresent: false });
-        }
+        io.to(roomUpper).emit('update-ui', { isPartnerPresent: (clients && clients.size >= 2) });
     });
 
     socket.on('send-pulse', async ({ roomId, x, y }) => {
         const roomUpper = roomId.toUpperCase();
         socket.to(roomUpper).emit('receive-pulse', { x, y });
-
         try {
             const result = await pool.query(
                 'UPDATE couples SET pulse_count = pulse_count + 1 WHERE room_code = $1 RETURNING pulse_count',
                 [roomUpper]
             );
-            if (result.rows.length > 0) {
-                io.to(roomUpper).emit('update-count', result.rows[0].pulse_count);
-            }
-        } catch (err) {
-            console.error("Pulse DB Error");
-        }
+            io.to(roomUpper).emit('update-count', result.rows[0].pulse_count);
+        } catch (err) { console.error("Pulse error"); }
     });
 
     socket.on('send-gift', ({ roomId, emoji }) => {
@@ -125,14 +96,10 @@ io.on('connection', (socket) => {
 
     socket.on('disconnecting', () => {
         for (const room of socket.rooms) {
-            if (room !== socket.id) {
-                socket.to(room).emit('update-ui', { isPartnerPresent: false });
-            }
+            if (room !== socket.id) socket.to(room).emit('update-ui', { isPartnerPresent: false });
         }
     });
 });
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-    console.log(`🚀 Server on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server on ${PORT}`));

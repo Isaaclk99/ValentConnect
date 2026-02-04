@@ -8,7 +8,7 @@ const cors = require('cors');
 const app = express();
 
 // 1. CORS CONFIGURATION: Explicitly allow your Vercel URL
-const allowedOrigin = "https://valentinepluse.vercel.app";
+const allowedOrigin = "https://pluse-connect.vercel.app";
 
 app.use(cors({
     origin: allowedOrigin,
@@ -46,7 +46,7 @@ const io = new Server(server, {
         methods: ["GET", "POST"],
         credentials: true
     },
-    transports: ['websocket', 'polling'] 
+    transports: ['websocket', 'polling']
 });
 
 // --- API ROUTES ---

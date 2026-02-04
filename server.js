@@ -7,46 +7,47 @@ const cors = require('cors');
 
 const app = express();
 
-// 1. CORS CONFIGURATION: Explicitly allow your Vercel URL
-const allowedOrigin = "https://pluse-connect.vercel.app";
+// 1. DATABASE CONNECTION
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
+});
+
+// 2. CORS CONFIGURATION (Updated: Removed old link)
+const allowedOrigins = [
+    "https://pluse-connect.vercel.app", 
+    "https://valentconnect-backend.vercel.app"
+];
 
 app.use(cors({
-    origin: allowedOrigin,
+    origin: function (origin, callback) {
+        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(null, true); 
+        }
+    },
     methods: ["GET", "POST"],
     credentials: true
 }));
 
 app.use(express.json());
 
-// 2. DATABASE CONNECTION (Neon Postgres)
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
-});
-
-pool.connect((err, client, release) => {
-    if (err) {
-        return console.error('❌ Database connection failed:', err.message);
-    }
-    console.log('✅ Connected to Neon Database');
-    release();
-});
-
-// 3. HEALTH CHECK ROUTE (To wake up Render faster)
 app.get('/', (req, res) => {
     res.send('Backend is Awake and Running! ❤️');
 });
 
 const server = http.createServer(app);
 
-// 4. SOCKET.IO CONFIGURATION
+// 3. SOCKET.IO CONFIGURATION
 const io = new Server(server, {
     cors: {
-        origin: allowedOrigin,
+        origin: "https://pluse-connect.vercel.app",
         methods: ["GET", "POST"],
         credentials: true
     },
-    transports: ['websocket', 'polling']
+    transports: ['polling', 'websocket'],
+    allowEIO3: true
 });
 
 // --- API ROUTES ---
@@ -61,8 +62,7 @@ app.post('/api/register', async (req, res) => {
         );
         res.json({ success: true });
     } catch (err) {
-        console.error("Registration Error:", err.message);
-        res.status(400).json({ error: "Room code already exists or data missing." });
+        res.status(400).json({ error: "Room already exists." });
     }
 });
 
@@ -70,21 +70,10 @@ app.post('/api/login', async (req, res) => {
     const { roomCode, myName } = req.body;
     try {
         const result = await pool.query('SELECT * FROM couples WHERE room_code = $1', [roomCode.toUpperCase()]);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: "Room code not found." });
-        }
+        if (result.rows.length === 0) return res.status(404).json({ error: "No room." });
 
         const couple = result.rows[0];
-        let letter = "";
-
-        if (myName.toLowerCase() === couple.user_a_name.toLowerCase()) {
-            letter = couple.letter_for_a;
-        } else if (myName.toLowerCase() === couple.user_b_name.toLowerCase()) {
-            letter = couple.letter_for_b;
-        } else {
-            return res.status(403).json({ error: "Name does not match this room." });
-        }
+        let letter = (myName.toLowerCase() === couple.user_a_name.toLowerCase()) ? couple.letter_for_a : couple.letter_for_b;
 
         res.json({
             letter: letter,
@@ -92,56 +81,58 @@ app.post('/api/login', async (req, res) => {
             pulseCount: couple.pulse_count
         });
     } catch (err) {
-        console.error("Login Error:", err.message);
-        res.status(500).json({ error: "Internal server error." });
+        res.status(500).json({ error: "Server error" });
     }
 });
 
 // --- SOCKET.IO LOGIC ---
 
 io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
-
     socket.on('join-room', (room) => {
-        socket.join(room);
-        console.log(`User joined room: ${room}`);
-
-        const clients = io.sockets.adapter.rooms.get(room);
+        const roomUpper = room.toUpperCase();
+        socket.join(roomUpper);
+        
+        const clients = io.sockets.adapter.rooms.get(roomUpper);
         const numClients = clients ? clients.size : 0;
-
+        
         if (numClients >= 2) {
-            io.to(room).emit('update-ui', { isPartnerPresent: true });
+            io.to(roomUpper).emit('update-ui', { isPartnerPresent: true });
+        } else {
+            socket.emit('update-ui', { isPartnerPresent: false });
         }
     });
 
     socket.on('send-pulse', async ({ roomId, x, y }) => {
-        socket.to(roomId).emit('receive-pulse', { x, y });
+        const roomUpper = roomId.toUpperCase();
+        socket.to(roomUpper).emit('receive-pulse', { x, y });
 
         try {
             const result = await pool.query(
                 'UPDATE couples SET pulse_count = pulse_count + 1 WHERE room_code = $1 RETURNING pulse_count',
-                [roomId.toUpperCase()]
+                [roomUpper]
             );
-
             if (result.rows.length > 0) {
-                io.to(roomId).emit('update-count', result.rows[0].pulse_count);
+                io.to(roomUpper).emit('update-count', result.rows[0].pulse_count);
             }
         } catch (err) {
-            console.error("Database Pulse Error:", err);
+            console.error("Pulse DB Error");
         }
     });
 
     socket.on('send-gift', ({ roomId, emoji }) => {
-        io.to(roomId).emit('receive-gift', { emoji });
+        io.to(roomId.toUpperCase()).emit('receive-gift', { emoji });
     });
 
-    socket.on('disconnect', () => {
-        console.log('A user disconnected');
+    socket.on('disconnecting', () => {
+        for (const room of socket.rooms) {
+            if (room !== socket.id) {
+                socket.to(room).emit('update-ui', { isPartnerPresent: false });
+            }
+        }
     });
 });
 
-// Render provides the PORT automatically
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-    console.log(`🚀 ValentConnect Backend Active on Port ${PORT}`);
+    console.log(`🚀 Server on port ${PORT}`);
 });

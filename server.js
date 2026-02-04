@@ -11,10 +11,10 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// Update this list with your actual frontend URL
+// CRITICAL: Ensure these URLs match your frontend exactly
 const allowedOrigins = [
     "https://pluse-connect.vercel.app",
-    "https://valentconnect-backend.vercel.app"
+    "https://valentinepluse.vercel.app"
 ];
 
 app.use(cors({
@@ -22,7 +22,7 @@ app.use(cors({
         if (!origin || allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            callback(null, true); // Set to true for easier debugging during setup
+            callback(null, true); // Temporarily allow all for debugging
         }
     },
     methods: ["GET", "POST"],
@@ -41,9 +41,9 @@ const io = new Server(server, {
     transports: ['polling', 'websocket']
 });
 
-// --- ROUTES ---
-app.get('/', (req, res) => res.send('Pulse API Running ❤️'));
+app.get('/', (req, res) => res.send('Server is Online! ❤️'));
 
+// --- API ROUTES ---
 app.post('/api/register', async (req, res) => {
     const { roomCode, userA, userB, letterA, letterB, song } = req.body;
     try {
@@ -69,13 +69,20 @@ app.post('/api/login', async (req, res) => {
     } catch (err) { res.status(500).json({ error: "DB error" }); }
 });
 
-// --- SOCKETS ---
+// --- SOCKET LOGIC ---
 io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
+
     socket.on('join-room', (room) => {
         const roomUpper = room.toUpperCase();
         socket.join(roomUpper);
+        console.log(`Socket ${socket.id} joined room: ${roomUpper}`);
+
         const clients = io.sockets.adapter.rooms.get(roomUpper);
-        io.to(roomUpper).emit('update-ui', { isPartnerPresent: (clients && clients.size >= 2) });
+        const numClients = clients ? clients.size : 0;
+
+        // Notify everyone in the room about the partner status
+        io.to(roomUpper).emit('update-ui', { isPartnerPresent: numClients >= 2 });
     });
 
     socket.on('send-pulse', async ({ roomId, x, y }) => {
@@ -87,7 +94,7 @@ io.on('connection', (socket) => {
                 [roomUpper]
             );
             io.to(roomUpper).emit('update-count', result.rows[0].pulse_count);
-        } catch (err) { console.error("Pulse error"); }
+        } catch (err) { console.error("Pulse error:", err); }
     });
 
     socket.on('send-gift', ({ roomId, emoji }) => {
@@ -96,10 +103,14 @@ io.on('connection', (socket) => {
 
     socket.on('disconnecting', () => {
         for (const room of socket.rooms) {
-            if (room !== socket.id) socket.to(room).emit('update-ui', { isPartnerPresent: false });
+            if (room !== socket.id) {
+                const clients = io.sockets.adapter.rooms.get(room);
+                const numClients = clients ? clients.size - 1 : 0;
+                socket.to(room).emit('update-ui', { isPartnerPresent: numClients >= 2 });
+            }
         }
     });
 });
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log(`Server on ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

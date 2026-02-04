@@ -6,7 +6,14 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
+
+// 1. UPDATE CORS: Replace the origin with your actual Vercel URL
+app.use(cors({
+    origin: "https://valentinepluse.vercel.app",
+    methods: ["GET", "POST"],
+    credentials: true
+}));
+
 app.use(express.json());
 
 // Database Connection
@@ -15,7 +22,6 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// Database Connection Test
 pool.connect((err, client, release) => {
     if (err) {
         return console.error('❌ Database connection failed:', err.message);
@@ -25,8 +31,15 @@ pool.connect((err, client, release) => {
 });
 
 const server = http.createServer(app);
+
+// 2. UPDATE SOCKET CORS: Specifically handle the handshake
 const io = new Server(server, {
-    cors: { origin: "*" }
+    cors: {
+        origin: "https://valentinepluse.vercel.app",
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    transports: ['websocket', 'polling'] // Ensures better compatibility
 });
 
 // --- API ROUTES ---
@@ -58,6 +71,7 @@ app.post('/api/login', async (req, res) => {
         const couple = result.rows[0];
         let letter = "";
 
+        // Match Logic: If user logs in as A, show letter from B (A's intended letter)
         if (myName.toLowerCase() === couple.user_a_name.toLowerCase()) {
             letter = couple.letter_for_a;
         } else if (myName.toLowerCase() === couple.user_b_name.toLowerCase()) {
@@ -94,7 +108,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Pulse Logic
     socket.on('send-pulse', async ({ roomId, x, y }) => {
         socket.to(roomId).emit('receive-pulse', { x, y });
 
@@ -112,10 +125,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- NEW: GIFT FEATURE LOGIC ---
     socket.on('send-gift', ({ roomId, emoji }) => {
-        // io.to(roomId) sends it to EVERYONE in the room including the sender
-        // This makes sure both partners see the gift animation simultaneously
         io.to(roomId).emit('receive-gift', { emoji });
         console.log(`Gift ${emoji} sent in room: ${roomId}`);
     });
@@ -128,6 +138,5 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`\n🚀 ValentConnect Backend Active!`);
-    console.log(`📡 URL: https://valentconnect.onrender.com`);
-    console.log(`💓 Ready for pulses and gifts...\n`);
+    console.log(`📡 Server listening on port ${PORT}`);
 });

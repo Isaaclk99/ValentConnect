@@ -7,16 +7,18 @@ const cors = require('cors');
 
 const app = express();
 
-// 1. UPDATE CORS: Replace the origin with your actual Vercel URL
+// 1. CORS CONFIGURATION: Explicitly allow your Vercel URL
+const allowedOrigin = "https://valentinepluse.vercel.app";
+
 app.use(cors({
-    origin: "https://valentinepluse.vercel.app",
+    origin: allowedOrigin,
     methods: ["GET", "POST"],
     credentials: true
 }));
 
 app.use(express.json());
 
-// Database Connection
+// 2. DATABASE CONNECTION (Neon Postgres)
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
@@ -30,16 +32,21 @@ pool.connect((err, client, release) => {
     release();
 });
 
+// 3. HEALTH CHECK ROUTE (To wake up Render faster)
+app.get('/', (req, res) => {
+    res.send('Backend is Awake and Running! ❤️');
+});
+
 const server = http.createServer(app);
 
-// 2. UPDATE SOCKET CORS: Specifically handle the handshake
+// 4. SOCKET.IO CONFIGURATION
 const io = new Server(server, {
     cors: {
-        origin: "https://valentinepluse.vercel.app",
+        origin: allowedOrigin,
         methods: ["GET", "POST"],
         credentials: true
     },
-    transports: ['websocket', 'polling'] // Ensures better compatibility
+    transports: ['websocket', 'polling'] 
 });
 
 // --- API ROUTES ---
@@ -71,7 +78,6 @@ app.post('/api/login', async (req, res) => {
         const couple = result.rows[0];
         let letter = "";
 
-        // Match Logic: If user logs in as A, show letter from B (A's intended letter)
         if (myName.toLowerCase() === couple.user_a_name.toLowerCase()) {
             letter = couple.letter_for_a;
         } else if (myName.toLowerCase() === couple.user_b_name.toLowerCase()) {
@@ -94,6 +100,7 @@ app.post('/api/login', async (req, res) => {
 // --- SOCKET.IO LOGIC ---
 
 io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
 
     socket.on('join-room', (room) => {
         socket.join(room);
@@ -104,7 +111,6 @@ io.on('connection', (socket) => {
 
         if (numClients >= 2) {
             io.to(room).emit('update-ui', { isPartnerPresent: true });
-            console.log(`Room ${room} is now full. Partners connected.`);
         }
     });
 
@@ -127,7 +133,6 @@ io.on('connection', (socket) => {
 
     socket.on('send-gift', ({ roomId, emoji }) => {
         io.to(roomId).emit('receive-gift', { emoji });
-        console.log(`Gift ${emoji} sent in room: ${roomId}`);
     });
 
     socket.on('disconnect', () => {
@@ -135,8 +140,8 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = process.env.PORT || 3000;
+// Render provides the PORT automatically
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-    console.log(`\n🚀 ValentConnect Backend Active!`);
-    console.log(`📡 Server listening on port ${PORT}`);
+    console.log(`🚀 ValentConnect Backend Active on Port ${PORT}`);
 });
